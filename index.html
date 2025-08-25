@@ -241,6 +241,36 @@
             image-rendering: -moz-crisp-edges;
             image-rendering: crisp-edges;
         }
+        
+        /* Volume slider styling */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 8px;
+            background: #333;
+            outline: none;
+            border-radius: 5px;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #00ff00;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 2px solid #333;
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #00ff00;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 2px solid #333;
+        }
     </style>
 </head>
 <body>
@@ -252,8 +282,18 @@
             <button onclick="openLibrary()" style="margin-left: 20px;">LIBRARY</button>
             <div style="margin-top: 20px;">
                 <p>WASD/Arrow Keys: Move</p>
-                <p>SPACE: Jump</p>
+                <p>W/↑: Jump | SPACE: Flip Direction</p>
                 <p>Survive the increasing chaos!</p>
+            </div>
+            <div style="margin-top: 20px; text-align: left; max-width: 300px;">
+                <div style="margin-bottom: 10px;">
+                    <label for="musicVolume">Music Volume: <span id="musicVolumeValue">70%</span></label><br>
+                    <input type="range" id="musicVolume" min="0" max="100" value="70" style="width: 100%;">
+                </div>
+                <div>
+                    <label for="sfxVolume">SFX Volume: <span id="sfxVolumeValue">60%</span></label><br>
+                    <input type="range" id="sfxVolume" min="0" max="100" value="60" style="width: 100%;">
+                </div>
             </div>
         </div>
         
@@ -308,5 +348,31 @@
     </div>
     
     <script src="game.js"></script>
+    
+    <script>
+        // Volume control handlers
+        document.addEventListener('DOMContentLoaded', function() {
+            const musicVolumeSlider = document.getElementById('musicVolume');
+            const sfxVolumeSlider = document.getElementById('sfxVolume');
+            const musicVolumeValue = document.getElementById('musicVolumeValue');
+            const sfxVolumeValue = document.getElementById('sfxVolumeValue');
+            
+            musicVolumeSlider.addEventListener('input', function() {
+                const volume = parseInt(this.value);
+                musicVolumeValue.textContent = volume + '%';
+                if (window.game && window.game.audio) {
+                    window.game.audio.setMusicVolume(volume);
+                }
+            });
+            
+            sfxVolumeSlider.addEventListener('input', function() {
+                const volume = parseInt(this.value);
+                sfxVolumeValue.textContent = volume + '%';
+                if (window.game && window.game.audio) {
+                    window.game.audio.setSfxVolume(volume);
+                }
+            });
+        });
+    </script>
 </body>
 </html>

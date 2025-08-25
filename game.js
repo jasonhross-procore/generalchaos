@@ -7,6 +7,7 @@ class Game {
         this.gameState = 'menu';
         this.score = 0;
         this.lives = 3;
+        this.paused = false;
         this.shieldHealth = 100;
         this.maxShieldHealth = 100;
         this.chaosLevel = 1;
@@ -61,7 +62,7 @@ class Game {
         // Switch from title to background music
         this.audio.stopTitleMusic();
         setTimeout(() => {
-            this.audio.playBackgroundMusic();
+            this.audio.playFunkyMusic();
         }, 200);
         
         this.audio.playMenuSelect();
@@ -69,7 +70,7 @@ class Game {
     
     gameOver() {
         this.gameState = 'gameOver';
-        this.audio.stopBackgroundMusic();
+        this.audio.stopMusic();
         
         // Add delay to ensure background music stops before game over sound
         setTimeout(() => {
@@ -101,6 +102,12 @@ class Game {
         document.addEventListener('keydown', (e) => {
             this.keys[e.key.toLowerCase()] = true;
             this.keys[e.code] = true;
+            
+            // Handle pause/unpause with ESC key
+            if (e.key === 'Escape' && this.gameState === 'playing') {
+                this.togglePause();
+                e.preventDefault();
+            }
         });
         
         document.addEventListener('keyup', (e) => {
@@ -109,8 +116,34 @@ class Game {
         });
     }
     
+    togglePause() {
+        this.paused = !this.paused;
+        
+        if (this.paused) {
+            // Pause music
+            if (this.audio.backgroundMusic) {
+                this.audio.backgroundMusic.pause();
+            }
+            // Stop machine gun loop if playing
+            this.audio.stopMachineGunLoop();
+            // Play pause sound
+            this.audio.playPauseIn();
+            console.log('Game paused');
+        } else {
+            // Resume music
+            if (this.audio.backgroundMusic) {
+                this.audio.backgroundMusic.play().catch(error => {
+                    console.warn('Could not resume music:', error);
+                });
+            }
+            // Play unpause sound (reuse pause sound)
+            this.audio.playPauseIn();
+            console.log('Game unpaused');
+        }
+    }
+    
     update() {
-        if (this.gameState !== 'playing') return;
+        if (this.gameState !== 'playing' || this.paused) return;
         
         if (this.killCount >= this.killsForNextChaos) {
             this.chaosLevel++;
@@ -118,6 +151,10 @@ class Game {
             this.killsForNextChaos += Math.floor(this.chaosLevel * 5);
             this.addChaosEffect();
             this.showChaosLevelUp();
+            // Update music for new chaos level
+            this.audio.playFunkyMusic().catch(error => {
+                console.error('Failed to update music:', error);
+            });
         }
         
         this.player.update(this.keys);
@@ -539,6 +576,11 @@ class Game {
                     const damage = this.getPlayerBulletDamage(this.bullets[j]);
                     this.enemies[i].hp -= damage;
                     
+                    // Play damage sound if enemy is still alive
+                    if (this.enemies[i].hp > 0) {
+                        this.audio.playDamageHit();
+                    }
+                    
                     // Show damage number
                     this.floatingTexts.push(new FloatingText(
                         this.enemies[i].x + this.enemies[i].width / 2,
@@ -853,6 +895,9 @@ class Game {
         } else {
             // No shield - lose life
             this.lives--;
+            // Grant 2 seconds of invincibility (120 frames at 60fps)
+            this.player.invincibilityTimer = 120;
+            this.player.invincible = true;
             // Spawn ghost animation
             this.ghosts.push(new Ghost(
                 this.player.x + this.player.width / 2,
@@ -900,8 +945,31 @@ class Game {
         
         this.renderUI();
         
+        // Render pause overlay
+        if (this.paused && this.gameState === 'playing') {
+            this.renderPauseOverlay();
+        }
+        
         // Final reset to prevent accumulating transforms
         this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    
+    renderPauseOverlay() {
+        // Semi-transparent dark overlay
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Pause text
+        this.ctx.fillStyle = '#00ff00';
+        this.ctx.font = '48px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('PAUSED', this.canvas.width / 2, this.canvas.height / 2 - 20);
+        
+        this.ctx.font = '24px monospace';
+        this.ctx.fillText('Press ESC to resume', this.canvas.width / 2, this.canvas.height / 2 + 30);
+        
+        // Reset text alignment
+        this.ctx.textAlign = 'left';
     }
     
     renderBackground() {
@@ -976,7 +1044,7 @@ class Game {
     
     gameOver() {
         this.gameState = 'gameover';
-        this.audio.stopBackgroundMusic();
+        this.audio.stopMusic();
         
         // Add delay to ensure background music stops before game over sound
         setTimeout(() => {
@@ -1003,7 +1071,10 @@ class Player {
         this.shootCooldown = 0;
         this.powerupEffects = {};
         this.invincible = false;
+        this.debugInvincible = false; // Track if invincibility was set by debug toggle
+        this.invincibilityTimer = 0; // Timer for temporary invincibility after losing life
         this.godModeGun = false;
+        this.facingDirection = 1; // 1 for right, -1 for left
         this.originalWidth = this.width;
         this.originalHeight = this.height;
         this.sizeMultiplier = 1;
@@ -1013,6 +1084,9 @@ class Player {
         this.uKeyPressed = false;
         this.yKeyPressed = false;
         this.tKeyPressed = false;
+        this.cKeyPressed = false;
+        this.spaceKeyPressed = false;
+        this.facingDirection = 1; // 1 = right, -1 = left
         this.lavaContactTime = 0;
         this.inLava = false;
         this.spinVelocity = 0;
@@ -1022,13 +1096,24 @@ class Player {
     }
     
     update(keys) {
+        // Handle invincibility timer (but don't override debug toggle)
+        if (this.invincibilityTimer > 0) {
+            this.invincibilityTimer--;
+            if (this.invincibilityTimer === 0) {
+                // Timer expired - only turn off invincibility if it was set by timer, not debug toggle
+                if (!this.debugInvincible && !this.powerupEffects.god_mode) {
+                    this.invincible = false;
+                }
+            }
+        }
+        
         // Movement
         this.vx *= 0.8;
         if (keys['a'] || keys['ArrowLeft']) this.vx -= 0.8;
         if (keys['d'] || keys['ArrowRight']) this.vx += 0.8;
         
         // Jumping
-        if ((keys['w'] || keys['ArrowUp'] || keys[' ']) && this.onGround) {
+        if ((keys['w'] || keys['ArrowUp']) && this.onGround) {
             this.vy = -12;
             this.onGround = false;
             game.audio.playJump();
@@ -1070,6 +1155,10 @@ class Player {
                 game.killsForNextChaos += Math.floor(game.chaosLevel * 5);
                 game.addChaosEffect();
                 game.showChaosLevelUp();
+                // Update music for new chaos level
+                game.audio.playFunkyMusic().catch(error => {
+                    console.error('Failed to update music:', error);
+                });
                 this.pKeyPressed = true;
             }
         } else {
@@ -1079,7 +1168,8 @@ class Player {
         // Testing: O key to toggle invincibility
         if (keys['o']) {
             if (!this.oKeyPressed) {
-                this.invincible = !this.invincible;
+                this.debugInvincible = !this.debugInvincible;
+                this.invincible = this.debugInvincible;
                 game.floatingTexts.push(new FloatingText(
                     this.x + this.width / 2,
                     this.y - 20,
@@ -1153,6 +1243,32 @@ class Player {
             this.tKeyPressed = false;
         }
         
+        // Testing: C key to trigger clone shot
+        if (keys['c']) {
+            if (!this.cKeyPressed) {
+                this.powerupEffects.clone = 600; // 10 seconds
+                game.floatingTexts.push(new FloatingText(
+                    this.x + this.width / 2,
+                    this.y - 20,
+                    'CLONE SHOT ACTIVATED!',
+                    'collected'
+                ));
+                this.cKeyPressed = true;
+            }
+        } else {
+            this.cKeyPressed = false;
+        }
+        
+        // Space bar: Flip facing direction
+        if (keys[' ']) {
+            if (!this.spaceKeyPressed) {
+                this.facingDirection *= -1;
+                this.spaceKeyPressed = true;
+            }
+        } else {
+            this.spaceKeyPressed = false;
+        }
+        
         // Auto-fire (continuous shooting)
         if (this.shootCooldown <= 0) {
             if (this.powerupEffects.big_boy) {
@@ -1161,6 +1277,7 @@ class Player {
                     this.x + this.width,
                     this.y + this.height / 2 - 100
                 );
+                bigBoyBullet.vx = bigBoyBullet.vx * this.facingDirection;
                 game.bullets.push(bigBoyBullet);
                 game.audio.playShoot('big_boy', 0.5); // Reduced volume for single Big Boy
                 this.shootCooldown = 45; // Much slower firing for big boys
@@ -1236,7 +1353,8 @@ class Player {
                         const cloneCount = this.powerupEffects.clone ? 2 : 1;
                         
                         for (let clone = 0; clone < cloneCount; clone++) {
-                            const cloneOffset = clone * 6;
+                            const cloneOffsetX = clone * 20;
+                            const cloneOffsetY = clone * 10;
                             
                             // Spread shot - create fan pattern in each direction
                             if (this.powerupEffects.spread_shot) {
@@ -1246,8 +1364,8 @@ class Player {
                                     const spreadVy = Math.sin(spreadAngle) * 8;
                                     
                                     this.createSingleBullet(
-                                        this.x + this.width / 2 + cloneOffset,
-                                        this.y + this.height / 2,
+                                        this.x + this.width / 2 + cloneOffsetX,
+                                        this.y + this.height / 2 + cloneOffsetY,
                                         bulletType,
                                         spreadVx - 8,
                                         spreadVy - 0
@@ -1256,8 +1374,8 @@ class Player {
                             } else {
                                 // Single bullet per direction
                                 this.createSingleBullet(
-                                    this.x + this.width / 2 + cloneOffset,
-                                    this.y + this.height / 2,
+                                    this.x + this.width / 2 + cloneOffsetX,
+                                    this.y + this.height / 2 + cloneOffsetY,
                                     bulletType,
                                     vx - 8,
                                     vy - 0
@@ -1277,8 +1395,8 @@ class Player {
                                             const spreadVy = Math.sin(spreadAngle) * 8;
                                             
                                             this.createSingleBullet(
-                                                this.x + this.width / 2 + cloneOffset,
-                                                this.y + this.height / 2 + multi * 6,
+                                                this.x + this.width / 2 + cloneOffsetX,
+                                                this.y + this.height / 2 + multi * 6 + cloneOffsetY,
                                                 bulletType,
                                                 spreadVx - 8,
                                                 spreadVy + multi * 0.5
@@ -1286,8 +1404,8 @@ class Player {
                                         }
                                     } else {
                                         this.createSingleBullet(
-                                            this.x + this.width / 2 + cloneOffset,
-                                            this.y + this.height / 2 + multi * 6,
+                                            this.x + this.width / 2 + cloneOffsetX,
+                                            this.y + this.height / 2 + multi * 6 + cloneOffsetY,
                                             bulletType,
                                             vx - 8,
                                             vy + multi * 0.5
@@ -1367,6 +1485,14 @@ class Player {
             ctx.translate(-centerX, -centerY);
         }
         
+        // Apply horizontal flipping based on facing direction
+        if (this.facingDirection === -1) {
+            const centerX = this.x + this.width / 2;
+            ctx.translate(centerX, 0);
+            ctx.scale(-1, 1);
+            ctx.translate(-centerX, 0);
+        }
+        
         // Human soldier with pixel art style
         let bodyColor = '#2d5a2d'; // Military green uniform
         if (this.invincible) {
@@ -1421,7 +1547,10 @@ class Player {
         ctx.fillStyle = '#8b4513';
         ctx.fillRect(this.x + 2, this.y + 16, 12, 2);
         
-        // Shield percentage over head
+        // Shield percentage over head - render without sprite transforms
+        ctx.save(); // Save current transform state
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset all transforms for text
+        
         const shieldPercent = Math.round((window.game.shieldHealth / window.game.maxShieldHealth) * 100);
         ctx.font = '10px Courier New';
         ctx.textAlign = 'center';
@@ -1457,6 +1586,8 @@ class Player {
         
         ctx.fillText(`${shieldPercent}%`, this.x + this.width / 2, this.y - 5);
         ctx.textAlign = 'left'; // Reset text align
+        
+        ctx.restore(); // Restore original transform state
         
         // Restore context after rotation
         ctx.restore();
@@ -1610,11 +1741,17 @@ class Player {
     }
     
     triggerNuke() {
-        for (let i = 0; i < 50; i++) {
-            game.particles.push(new Particle(400, 200, 'nuke'));
+        // Create massive nuclear explosion with much more particles
+        for (let i = 0; i < 200; i++) {
+            // Spread particles across the entire screen
+            const x = Math.random() * 800;
+            const y = Math.random() * 400;
+            game.particles.push(new Particle(x, y, 'nuke'));
         }
         game.enemies = [];
         game.score += 500 * game.chaosLevel;
+        // Play nuclear explosion sound
+        game.audio.playNuclearExplosion();
     }
     
     triggerBlackHole() {
@@ -1694,15 +1831,16 @@ class Player {
         
         // Create bullets based on combinations
         for (let clone = 0; clone < bulletCount; clone++) {
-            const cloneOffset = clone * 8;
+            const cloneOffsetX = clone * 20; // Increased offset to make cloning more visible
+            const cloneOffsetY = clone * 10; // Vertical offset for clone bullets
             
             if (tripleShot && spreadPattern) {
                 // Triple spread combo: 3x5 grid of bullets
                 for (let row = 0; row < 3; row++) {
                     for (let col = -2; col <= 2; col++) {
                         this.createSingleBullet(
-                            this.x + this.width + cloneOffset,
-                            this.y + this.height / 2 + (row - 1) * 8,
+                            this.x + this.width + cloneOffsetX,
+                            this.y + this.height / 2 + (row - 1) * 8 + cloneOffsetY,
                             bulletType,
                             col * 2,
                             (row - 1) * 1.5
@@ -1713,8 +1851,8 @@ class Player {
                 // Triple shot: 3 bullets vertically
                 for (let i = -1; i <= 1; i++) {
                     this.createSingleBullet(
-                        this.x + this.width + cloneOffset,
-                        this.y + this.height / 2 + i * 8,
+                        this.x + this.width + cloneOffsetX,
+                        this.y + this.height / 2 + i * 8 + cloneOffsetY,
                         bulletType,
                         0,
                         i * 0.5
@@ -1724,8 +1862,8 @@ class Player {
                 // Spread shot: 5 bullets in fan
                 for (let i = -2; i <= 2; i++) {
                     this.createSingleBullet(
-                        this.x + this.width + cloneOffset,
-                        this.y + this.height / 2,
+                        this.x + this.width + cloneOffsetX,
+                        this.y + this.height / 2 + cloneOffsetY,
                         bulletType,
                         0,
                         i * 2
@@ -1734,8 +1872,8 @@ class Player {
             } else {
                 // Single bullet
                 this.createSingleBullet(
-                    this.x + this.width + cloneOffset,
-                    this.y + this.height / 2,
+                    this.x + this.width + cloneOffsetX,
+                    this.y + this.height / 2 + cloneOffsetY,
                     bulletType,
                     0,
                     0
@@ -1773,6 +1911,7 @@ class Player {
                 let bullet = new Bullet(this.x + this.width, this.y + this.height / 2 + (i - 0.5) * 10);
                 bullet.explosive = true;
                 bullet.piercing = true;
+                bullet.vx = bullet.vx * this.facingDirection;
                 game.bullets.push(bullet);
                 
                 // Determine weapon type for sound
@@ -1807,7 +1946,7 @@ class Player {
                 break;
         }
         
-        bullet.vx += vxMod;
+        bullet.vx = (bullet.vx * this.facingDirection) + vxMod;
         bullet.vy = vyMod;
         
         // Apply powerup modifiers
@@ -3582,10 +3721,6 @@ class GroundHole {
 }
 
 // Library System
-function openLibrary() {
-    document.getElementById('library').classList.remove('hidden');
-    populateLibrary();
-}
 
 function closeLibrary() {
     document.getElementById('library').classList.add('hidden');
@@ -3602,12 +3737,18 @@ function showTab(tabName) {
 }
 
 function populateLibrary() {
-    populatePowerups();
-    populateEnemies();
-    populateChaosLevels();
+    console.log('🔍 Populating library...');
+    try {
+        populatePowerups();
+        populateEnemies();
+        populateChaosLevels();
+    } catch (error) {
+        console.error('Error populating library:', error);
+    }
 }
 
 function populatePowerups() {
+    console.log('🔍 Populating powerups...');
     const powerupData = [
         { type: 'rapidfire', name: 'RAPID FIRE', color: '#00ff00', description: 'Increases firing rate significantly (1 damage/bullet)' },
         { type: 'multishot', name: 'MULTISHOT', color: '#88ff00', description: 'Fires 3 bullets vertically (1 damage each)' },
@@ -4305,9 +4446,64 @@ class AudioSystem {
         this.sfxGain = null;
         this.currentMusic = null;
         this.titleMusicPlaying = false;
-        this.backgroundMusicPlaying = false;
+        this.musicPlaying = false;
+        this.titleMusicTimeout = null;
+        this.backgroundMusic = null;
+        this.titleMusic = null;
+        this.currentTrackNumber = 0;
+        this.musicVolumeMultiplier = 0.7; // Default 70%
+        this.sfxVolumeMultiplier = 0.6; // Default 60%
+        this.machineGunLoop = null;
+        this.machineGunPlaying = false;
         
         this.init();
+    }
+    
+    setMusicVolume(volume) {
+        this.musicVolumeMultiplier = volume / 100;
+        // Update current music volume - use slider value directly
+        if (this.backgroundMusic) {
+            this.backgroundMusic.volume = this.musicVolumeMultiplier;
+        }
+        if (this.titleMusic) {
+            this.titleMusic.volume = this.musicVolumeMultiplier;
+        }
+    }
+    
+    setSfxVolume(volume) {
+        this.sfxVolumeMultiplier = volume / 100;
+        // Update Web Audio gain nodes
+        if (this.sfxGain) {
+            this.sfxGain.gain.setValueAtTime(this.sfxVolumeMultiplier, this.audioContext.currentTime);
+        }
+        // Update machine gun loop volume if playing
+        if (this.machineGunLoop) {
+            this.machineGunLoop.volume = this.sfxVolumeMultiplier * 0.8;
+        }
+    }
+    
+    // Helper method to play SFX files
+    playSfxFile(filename, volume = 1.0) {
+        try {
+            const audio = new Audio(filename);
+            const finalVolume = this.sfxVolumeMultiplier * volume;
+            audio.volume = Math.min(finalVolume, 1.0); // Cap at 1.0
+            console.log(`🎵 Playing ${filename} at volume ${audio.volume} (requested: ${volume}, multiplier: ${this.sfxVolumeMultiplier})`);
+            audio.play().catch(error => {
+                console.warn(`Could not play ${filename}:`, error);
+            });
+            return audio;
+        } catch (error) {
+            console.warn(`Error loading ${filename}:`, error);
+            return null;
+        }
+    }
+    
+    // Helper method to play random SFX from array
+    playRandomSfx(filenames, volume = 1.0) {
+        if (filenames.length === 0) return null;
+        const randomFile = filenames[Math.floor(Math.random() * filenames.length)];
+        return this.playSfxFile(randomFile, volume);
     }
     
     init() {
@@ -4326,7 +4522,7 @@ class AudioSystem {
             // Set initial volumes
             this.masterGain.gain.setValueAtTime(0.7, this.audioContext.currentTime);
             this.musicGain.gain.setValueAtTime(0.4, this.audioContext.currentTime);
-            this.sfxGain.gain.setValueAtTime(0.6, this.audioContext.currentTime);
+            this.sfxGain.gain.setValueAtTime(this.sfxVolumeMultiplier, this.audioContext.currentTime);
             
         } catch (e) {
             console.log('Web Audio API not supported');
@@ -4357,127 +4553,88 @@ class AudioSystem {
         return { oscillator, gainNode };
     }
     
-    // Play funky title music
-    playTitleMusic() {
-        if (this.titleMusicPlaying || !this.audioContext) return;
+    // Play title screen music from MP3 file
+    async playTitleMusic() {
+        if (this.titleMusicPlaying) return;
         this.titleMusicPlaying = true;
-        
-        const playChord = (frequencies, time, duration = 0.5) => {
-            frequencies.forEach((freq, i) => {
-                setTimeout(() => {
-                    this.createOscillator(freq, 'sawtooth', duration);
-                }, time + i * 50);
-            });
-        };
-        
-        // Funky chord progression
-        const playSequence = () => {
-            if (!this.titleMusicPlaying) return;
+        console.log('🎵 Loading titlescreen.mp3...');
+
+        try {
+            // Create audio element for title music
+            this.titleMusic = new Audio('titlescreen.mp3');
+            this.titleMusic.loop = true;
+            this.titleMusic.volume = this.musicVolumeMultiplier;
             
-            // Measure 1 - Em chord with funk rhythm
-            playChord([164.81, 196.00, 246.94], 0, 0.3);
-            playChord([164.81, 196.00, 246.94], 400, 0.2);
-            playChord([164.81, 196.00, 246.94], 700, 0.3);
+            // Start playing
+            await this.titleMusic.play();
+            console.log('🎵 Playing titlescreen.mp3!');
             
-            // Measure 2 - Am chord
-            playChord([220, 261.63, 329.63], 1200, 0.4);
-            playChord([220, 261.63, 329.63], 1700, 0.2);
-            
-            // Measure 3 - D chord
-            playChord([146.83, 185.00, 220.00], 2400, 0.4);
-            
-            // Measure 4 - G chord with fill
-            playChord([196.00, 246.94, 293.66], 3200, 0.6);
-            playChord([392.00, 493.88], 3600, 0.2);
-            
-            // Loop
-            setTimeout(playSequence, 4800);
-        };
-        
-        playSequence();
+        } catch (error) {
+            console.error('🎵 Error loading titlescreen.mp3:', error);
+            this.titleMusicPlaying = false;
+        }
     }
     
     stopTitleMusic() {
         this.titleMusicPlaying = false;
+        if (this.titleMusic) {
+            this.titleMusic.pause();
+            this.titleMusic.currentTime = 0;
+            console.log('🎵 Title music stopped!');
+        }
     }
     
-    // Play background music during gameplay - gets crazier as levels progress
-    playBackgroundMusic() {
-        if (this.backgroundMusicPlaying || !this.audioContext) return;
-        this.backgroundMusicPlaying = true;
+    // Load and play background music based on chaos level
+    async playFunkyMusic() {
+        const chaosLevel = window.game ? window.game.chaosLevel : 1;
+        const trackNumber = Math.min(chaosLevel, 10); // Cap at track 10
         
-        const playBassline = (time) => {
-            if (!this.backgroundMusicPlaying) return;
-            
-            // Get chaos level for music intensity
-            const chaosLevel = window.game ? window.game.chaosLevel : 1;
-            const intensity = Math.min(chaosLevel / 10, 1); // 0 to 1 scale
-            
-            // Funky bassline pattern - gets faster and more distorted at higher levels
-            const baseNotes = [82.41, 82.41, 110, 82.41, 98, 110, 123.47, 110];
-            const notes = baseNotes.map(freq => {
-                // Add slight detuning at higher chaos levels
-                return freq + (Math.random() - 0.5) * intensity * 5;
-            });
-            const baseDurations = [0.3, 0.2, 0.4, 0.2, 0.3, 0.2, 0.4, 0.3];
-            const durations = baseDurations.map(dur => dur * (1 - intensity * 0.3)); // Faster at high chaos
-            
-            notes.forEach((freq, i) => {
-                setTimeout(() => {
-                    if (this.backgroundMusicPlaying) {
-                        // Use more aggressive waveforms at higher chaos
-                        const waveType = intensity > 0.5 ? 'square' : 'sawtooth';
-                        this.createOscillator(freq, waveType, durations[i]);
-                        
-                        // Add chaos effects
-                        if (intensity > 0.7 && Math.random() < 0.3) {
-                            this.createOscillator(freq * 1.5, 'square', durations[i] * 0.5);
-                        }
-                    }
-                }, i * 300 * (1 - intensity * 0.2)); // Faster timing
-            });
-            
-            const loopTime = 2400 * (1 - intensity * 0.4); // Shorter loops at high chaos
-            setTimeout(() => playBassline(time + loopTime), loopTime);
-        };
+        console.log(`🎵 playFunkyMusic called - Chaos Level: ${chaosLevel}, Track Number: ${trackNumber}, Current Track: ${this.currentTrackNumber}`);
         
-        const playLead = (time) => {
-            if (!this.backgroundMusicPlaying) return;
-            
-            const chaosLevel = window.game ? window.game.chaosLevel : 1;
-            const intensity = Math.min(chaosLevel / 10, 1);
-            
-            // Lead synth melody - more chaotic at higher levels
-            const baseMelody = [329.63, 369.99, 440, 493.88, 440, 369.99, 329.63];
-            const melody = baseMelody.map(freq => {
-                // Add chaos detuning
-                return freq + (Math.random() - 0.5) * intensity * 20;
-            });
-            
-            melody.forEach((freq, i) => {
-                setTimeout(() => {
-                    if (this.backgroundMusicPlaying) {
-                        const waveType = intensity > 0.6 ? 'square' : 'triangle';
-                        this.createOscillator(freq, waveType, 0.4);
-                        
-                        // Add octave doubles at high chaos
-                        if (intensity > 0.8) {
-                            this.createOscillator(freq * 2, 'triangle', 0.2);
-                        }
-                    }
-                }, i * 400 * (1 - intensity * 0.3) + 1200);
-            });
-            
-            const loopTime = 4800 * (1 - intensity * 0.3);
-            setTimeout(() => playLead(time + loopTime), loopTime);
-        };
+        // If we're already playing the correct track, don't restart
+        if (this.musicPlaying && this.currentTrackNumber === trackNumber) {
+            console.log(`🎵 Already playing track ${trackNumber}, skipping`);
+            return;
+        }
         
-        playBassline(0);
-        playLead(0);
+        // Stop current music if playing
+        if (this.backgroundMusic) {
+            this.backgroundMusic.pause();
+        }
+        
+        this.musicPlaying = true;
+        this.currentTrackNumber = trackNumber;
+        
+        // Handle track 8 filename (has a space)
+        const filename = trackNumber === 8 ? 'track 8.mp3' : `track${trackNumber}.mp3`;
+        console.log(`🎵 Loading ${filename} for chaos level ${chaosLevel}...`);
+
+        try {
+            // Create audio element
+            this.backgroundMusic = new Audio(filename);
+            this.backgroundMusic.loop = true;
+            
+            // Use slider volume directly for all tracks
+            this.backgroundMusic.volume = this.musicVolumeMultiplier;
+            console.log(`🎵 Setting volume to ${this.backgroundMusic.volume} for track ${trackNumber}`);
+            
+            // Start playing
+            await this.backgroundMusic.play();
+            console.log(`🎵 Playing ${filename}!`);
+            
+        } catch (error) {
+            console.error(`🎵 Error loading ${filename}:`, error);
+            this.musicPlaying = false;
+        }
     }
     
-    stopBackgroundMusic() {
-        this.backgroundMusicPlaying = false;
+    stopMusic() {
+        this.musicPlaying = false;
+        if (this.backgroundMusic) {
+            this.backgroundMusic.pause();
+            this.backgroundMusic.currentTime = 0;
+            console.log('🎵 Background music stopped!');
+        }
     }
     
     // Generate percussive element using sharp, quick oscillators
@@ -4505,110 +4662,107 @@ class AudioSystem {
         return { oscillator, gainNode };
     }
 
-    // Sound Effects - Different weapon sounds with percussive elements
+    // Sound Effects - Different weapon sounds using SFX files
     playShoot(weaponType = 'basic', volumeScale = 1.0) {
-        if (!this.audioContext) return;
-        
-        // Scale down volume to prevent loudness with multiple bullets
-        const baseVolume = 0.3 * volumeScale;
-        const percVolume = 0.5 * volumeScale;
+        const shotSounds = [
+            'sfx/shots/sfx_weapon_singleshot1.wav',
+            'sfx/shots/sfx_weapon_singleshot3.wav',
+            'sfx/shots/sfx_weapon_singleshot8.wav',
+            'sfx/shots/sfx_weapon_singleshot13.wav',
+            'sfx/shots/sfx_weapon_singleshot16.wav'
+        ];
         
         switch (weaponType) {
             case 'basic':
-                this.createOscillator(800, 'square', 0.08, baseVolume);
-                this.createPercussiveHit(400, 0.03, percVolume);
-                break;
-            case 'rapidfire':
-                this.createOscillator(600, 'triangle', 0.06, baseVolume);
-                this.createPercussiveHit(300, 0.02, percVolume);
-                break;
             case 'multishot':
-                // Single sound for multishot instead of double sound
-                this.createOscillator(675, 'square', 0.09, baseVolume);
-                this.createPercussiveHit(335, 0.035, percVolume);
-                break;
             case 'spread_shot':
-                // Single sound for spread shot instead of 3 + initial hit
-                this.createOscillator(600, 'triangle', 0.08, baseVolume);
-                this.createPercussiveHit(250, 0.04, percVolume);
+            case 'nuke':
+                this.playRandomSfx(shotSounds, 0.6 * volumeScale);
                 break;
             case 'laser':
-                this.createOscillator(1000, 'sine', 0.15, baseVolume);
-                this.createPercussiveHit(800, 0.08, percVolume);
-                setTimeout(() => {
-                    this.createOscillator(1200, 'sine', 0.1, baseVolume);
-                    this.createPercussiveHit(600, 0.06, percVolume);
-                }, 50);
+                this.playSfxFile('sfx/shots/sfx_weapon_singleshot14.wav', 0.8 * volumeScale);
                 break;
-            case 'nuke':
-                this.createOscillator(400, 'sawtooth', 0.2, baseVolume);
-                this.createPercussiveHit(150, 0.12, percVolume);
-                setTimeout(() => {
-                    this.createOscillator(300, 'sawtooth', 0.15, baseVolume);
-                    this.createPercussiveHit(120, 0.1, percVolume);
-                }, 80);
+            case 'rapidfire':
+                // Start machine gun loop if not already playing
+                if (!this.machineGunPlaying) {
+                    this.startMachineGunLoop();
+                }
+                // Reset the loop timer
+                this.machineGunTimer = Date.now() + 200; // Keep playing for 200ms after last shot
                 break;
             case 'big_boy':
-                this.createOscillator(200, 'square', 0.25, baseVolume);
-                this.createPercussiveHit(80, 0.2, percVolume);
-                setTimeout(() => {
-                    this.createOscillator(250, 'square', 0.2, baseVolume);
-                    this.createPercussiveHit(100, 0.15, percVolume);
-                }, 100);
-                setTimeout(() => {
-                    this.createOscillator(300, 'square', 0.15, baseVolume);
-                    this.createPercussiveHit(120, 0.12, percVolume);
-                }, 200);
-                break;
             case 'chaos':
-                const chaosFreq = Math.random() * 800 + 400;
-                this.createOscillator(chaosFreq, 'square', 0.1, baseVolume);
-                this.createPercussiveHit(Math.random() * 300 + 100, 0.06, percVolume);
-                setTimeout(() => {
-                    this.createOscillator(Math.random() * 600 + 300, 'sawtooth', 0.08, baseVolume);
-                    this.createPercussiveHit(Math.random() * 200 + 80, 0.04, percVolume);
-                }, 40);
+            default:
+                // Use random shot sound for big boy and chaos weapons
+                this.playRandomSfx(shotSounds, 0.8 * volumeScale);
                 break;
         }
+    }
+    
+    startMachineGunLoop() {
+        if (this.machineGunPlaying) return;
+        
+        this.machineGunLoop = new Audio('sfx/shots/sfx_wpn_machinegun_loop1.wav');
+        this.machineGunLoop.loop = true;
+        this.machineGunLoop.volume = this.sfxVolumeMultiplier * 0.8;
+        this.machineGunPlaying = true;
+        this.machineGunTimer = Date.now() + 200;
+        
+        this.machineGunLoop.play().catch(error => {
+            console.warn('Could not play machine gun loop:', error);
+            this.machineGunPlaying = false;
+        });
+        
+        // Check periodically if we should stop the loop
+        this.checkMachineGunLoop();
+    }
+    
+    checkMachineGunLoop() {
+        if (!this.machineGunPlaying) return;
+        
+        if (Date.now() > this.machineGunTimer) {
+            this.stopMachineGunLoop();
+        } else {
+            setTimeout(() => this.checkMachineGunLoop(), 50);
+        }
+    }
+    
+    stopMachineGunLoop() {
+        if (this.machineGunLoop) {
+            this.machineGunLoop.pause();
+            this.machineGunLoop.currentTime = 0;
+            this.machineGunLoop = null;
+        }
+        this.machineGunPlaying = false;
+    }
+    
+    playPauseIn() {
+        this.playSfxFile('sfx/pause/sfx_sounds_pause1_in.wav', 0.8);
+    }
+    
+    playNuclearExplosion() {
+        console.log('🎵 Playing nuclear explosion sound!');
+        this.playSfxFile('sfx/explosions/sfx_exp_double1.wav', 1.5);
     }
     
     playTakeDamage() {
-        if (!this.audioContext) return;
-        
-        // Player damage sound - harsh and attention-grabbing
-        this.createOscillator(200, 'sawtooth', 0.2);
-        setTimeout(() => {
-            this.createOscillator(150, 'square', 0.15);
-        }, 80);
-        setTimeout(() => {
-            this.createOscillator(100, 'sawtooth', 0.1);
-        }, 160);
+        this.playSfxFile('sfx/damage/sfx_sounds_impact6.wav', 0.8);
     }
     
     playEnemyHit() {
-        if (!this.audioContext) return;
-        
-        // More explosive enemy death sound - lowered by octave with variation
-        const baseFreq = 75 + Math.random() * 100; // Lower base frequency (75-175Hz)
-        const variation = Math.random() * 0.5 + 0.75; // 0.75 to 1.25 multiplier
-        
-        for (let i = 0; i < 4; i++) {
-            setTimeout(() => {
-                const freq = (baseFreq + Math.random() * 50) * variation;
-                const waveType = Math.random() > 0.5 ? 'sawtooth' : 'square';
-                this.createOscillator(freq, waveType, 0.15 + Math.random() * 0.1);
-            }, i * 35);
-        }
-        
-        // Add mid-pitched accent (lowered from 800 to 400)
-        setTimeout(() => {
-            this.createOscillator(300 + Math.random() * 200, 'triangle', 0.08);
-        }, 70);
-        
-        // Add rumble layer
-        setTimeout(() => {
-            this.createOscillator(40 + Math.random() * 30, 'sawtooth', 0.3);
-        }, 20);
+        // Play random explosion sound for enemy destruction
+        const explosionSounds = [
+            'sfx/explosions/explosion.mp3',
+            'sfx/explosions/sfx_exp_short_hard2.wav',
+            'sfx/explosions/sfx_exp_short_soft2.wav',
+            'sfx/explosions/sfx_exp_shortest_hard6.wav'
+        ];
+        this.playRandomSfx(explosionSounds, 0.8);
+    }
+    
+    playDamageHit() {
+        // Play damage sound when enemy is hit but not destroyed
+        this.playSfxFile('sfx/damage/sfx_damage_hit5.wav', 0.6);
     }
     
     playExplosion() {
@@ -4623,25 +4777,15 @@ class AudioSystem {
     }
     
     playPowerup() {
-        if (!this.audioContext) return;
-        
-        // Ascending powerup sound
-        const notes = [261.63, 329.63, 392, 523.25]; // C, E, G, C
-        notes.forEach((freq, i) => {
-            setTimeout(() => {
-                this.createOscillator(freq, 'sine', 0.2);
-            }, i * 80);
-        });
+        this.playSfxFile('sfx/powerup/sfx_sounds_powerup3.wav', 0.8);
     }
     
     playJump() {
-        if (!this.audioContext) return;
-        
-        // Quick jump sound
-        this.createOscillator(400, 'triangle', 0.15);
-        setTimeout(() => {
-            this.createOscillator(500, 'triangle', 0.1);
-        }, 40);
+        this.playSfxFile('sfx/jumps/sfx_movement_jump20.wav', 0.7);
+    }
+    
+    playLanding() {
+        this.playSfxFile('sfx/jumps/sfx_movement_jump16_landing.wav', 0.6);
     }
     
     playCarrierDestroyed() {
@@ -4673,24 +4817,7 @@ class AudioSystem {
     }
     
     playLifeLost() {
-        if (!this.audioContext) return;
-        
-        // Player grunt/yell sound - descending with vocal-like formants
-        this.createOscillator(180, 'sawtooth', 0.3, 0.4); // Low grunt base
-        setTimeout(() => {
-            this.createOscillator(220, 'square', 0.25, 0.3); // Mid grunt
-        }, 50);
-        setTimeout(() => {
-            this.createOscillator(160, 'sawtooth', 0.4, 0.35); // Falling grunt
-        }, 150);
-        
-        // Add some "breathiness" with filtered noise-like oscillators
-        setTimeout(() => {
-            this.createOscillator(300 + Math.random() * 100, 'triangle', 0.15, 0.2);
-        }, 80);
-        setTimeout(() => {
-            this.createOscillator(250 + Math.random() * 50, 'triangle', 0.1, 0.15);
-        }, 200);
+        this.playSfxFile('sfx/damage/sfx_deathscream_human1.wav', 0.9);
     }
     
     playGameOver() {
@@ -4744,6 +4871,7 @@ function openLibrary() {
         game.audio.playMenuSelect();
     }
     document.getElementById('library').classList.remove('hidden');
+    populateLibrary();
 }
 
 function closeLibrary() {
@@ -4757,4 +4885,25 @@ function closeLibrary() {
 window.addEventListener('load', () => {
     new AnimatedLogo();
     game = new Game();
+    console.log('🎮 Game script loaded successfully!');
+    
+    // Auto-start title music on first user interaction
+    const startTitleMusic = async () => {
+        try {
+            await game.audio.playTitleMusic();
+            // Remove all listeners after successful start
+            document.removeEventListener('click', startTitleMusic);
+            document.removeEventListener('keydown', startTitleMusic);
+            document.removeEventListener('mousemove', startTitleMusic);
+            document.removeEventListener('touchstart', startTitleMusic);
+        } catch (error) {
+            console.log('🎵 Title music autostart failed, waiting for user interaction');
+        }
+    };
+    
+    // Set up listeners for any user interaction
+    document.addEventListener('click', startTitleMusic);
+    document.addEventListener('keydown', startTitleMusic);
+    document.addEventListener('mousemove', startTitleMusic, { once: true });
+    document.addEventListener('touchstart', startTitleMusic, { passive: true });
 });
