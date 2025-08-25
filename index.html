@@ -382,25 +382,25 @@
                 line-height: 1.2;
             }
             
-            /* Desktop - restore normal layout */
-            @media screen and (min-width: 1025px) {
+            /* Desktop - restore normal layout (only for actual desktops) */
+            @media screen and (min-width: 1200px) {
                 #gameCanvas {
-                    position: relative;
-                    width: auto;
-                    height: auto;
-                    max-width: none;
-                    max-height: none;
+                    position: relative !important;
+                    width: auto !important;
+                    height: auto !important;
+                    max-width: none !important;
+                    max-height: none !important;
                 }
                 
                 .ui {
-                    position: relative;
-                    top: auto;
-                    left: auto;
-                    transform: none;
-                    background: transparent;
-                    border: none;
-                    font-size: 16px;
-                    margin-top: 10px;
+                    position: relative !important;
+                    top: auto !important;
+                    left: auto !important;
+                    transform: none !important;
+                    background: transparent !important;
+                    border: none !important;
+                    font-size: 16px !important;
+                    margin-top: 10px !important;
                 }
                 
                 .ui-main-stats span {
@@ -412,6 +412,10 @@
                     margin-top: 5px;
                     overflow: visible;
                     white-space: normal;
+                }
+                
+                .mobile-controls {
+                    display: none !important;
                 }
             }
             
@@ -1140,11 +1144,48 @@
                         console.log('Is landscape:', isLandscape);
                         
                         if (isLandscape) {
+                            // Force all mobile styles via JavaScript
                             mobileControls.style.display = 'flex';
                             mobileControls.style.justifyContent = 'space-between';
                             mobileControls.style.padding = '0 20px';
                             mobileControls.style.pointerEvents = 'auto';
                             mobileControls.style.zIndex = '200';
+                            mobileControls.style.position = 'fixed';
+                            mobileControls.style.bottom = '20px';
+                            mobileControls.style.left = '0';
+                            mobileControls.style.right = '0';
+                            
+                            // Force canvas fullscreen
+                            const canvas = document.getElementById('gameCanvas');
+                            if (canvas) {
+                                canvas.style.position = 'fixed';
+                                canvas.style.top = '0';
+                                canvas.style.left = '0';
+                                canvas.style.width = '100vw';
+                                canvas.style.height = '100vh';
+                                canvas.style.zIndex = '1';
+                                console.log('Force-enabled fullscreen canvas');
+                            }
+                            
+                            // Force UI positioning
+                            const ui = document.getElementById('ui');
+                            if (ui && !ui.classList.contains('hidden')) {
+                                ui.style.position = 'fixed';
+                                ui.style.top = '10px';
+                                ui.style.left = '50%';
+                                ui.style.transform = 'translateX(-50%) scale(0.96)';
+                                ui.style.zIndex = '100';
+                                ui.style.background = 'rgba(0, 0, 0, 0.55)';
+                                ui.style.padding = '5px 10px';
+                                ui.style.borderRadius = '3px';
+                                ui.style.border = '1px solid rgba(0, 255, 0, 0.75)';
+                                ui.style.fontSize = '11px';
+                                ui.style.textAlign = 'center';
+                                ui.style.maxWidth = '90vw';
+                                ui.style.display = 'block';
+                                console.log('Force-enabled mobile UI positioning');
+                            }
+                            
                             console.log('Force-enabled mobile controls via JavaScript (landscape)');
                             
                             // Add a temporary indicator to verify mobile mode is working
