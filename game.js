@@ -37,6 +37,14 @@ class Game {
         this.troopCarrierTimer = 0;
         this.chaosEffects = [];
         
+        // Screen flash effect for life lost
+        this.screenFlash = {
+            active: false,
+            duration: 0,
+            maxDuration: 60, // 1 second at 60fps
+            intensity: 0
+        };
+        
         // Initialize audio system
         this.audio = new AudioSystem();
         
@@ -82,11 +90,15 @@ class Game {
         document.getElementById('gameOver').classList.remove('hidden');
         document.getElementById('finalScore').textContent = this.score;
         document.getElementById('finalChaos').textContent = this.chaosLevel;
+        
+        // Hide mobile controls on game over
+        const mobileControls = document.querySelector('.mobile-controls');
+        if (mobileControls) {
+            mobileControls.classList.remove('game-active');
+        }
     }
     
-    restartGame() {
-        location.reload(); // Simple restart
-    }
+    // Restart handled by window.restartGame in index.html
     
     initializeBackground() {
         for (let i = 0; i < 20; i++) {
@@ -128,6 +140,16 @@ class Game {
             this.audio.stopMachineGunLoop();
             // Play pause sound
             this.audio.playPauseIn();
+            
+            // Show pause screen
+            const pauseScreen = document.getElementById('pauseScreen');
+            if (pauseScreen) {
+                pauseScreen.classList.remove('hidden');
+                // Sync volume values with current settings
+                if (window.syncPauseScreenVolumes) {
+                    window.syncPauseScreenVolumes();
+                }
+            }
             console.log('Game paused');
         } else {
             // Resume music
@@ -138,6 +160,12 @@ class Game {
             }
             // Play unpause sound (reuse pause sound)
             this.audio.playPauseIn();
+            
+            // Hide pause screen
+            const pauseScreen = document.getElementById('pauseScreen');
+            if (pauseScreen) {
+                pauseScreen.classList.add('hidden');
+            }
             console.log('Game unpaused');
         }
     }
@@ -170,6 +198,7 @@ class Game {
         this.updateGhosts();
         this.updatePortals();
         this.updateGroundHoles();
+        this.updateScreenFlash();
         
         this.spawnEnemies();
         this.spawnPowerups();
@@ -294,6 +323,22 @@ class Game {
             this.groundHoles[i].update();
             if (this.groundHoles[i].x < -this.groundHoles[i].width) {
                 this.groundHoles.splice(i, 1);
+            }
+        }
+    }
+    
+    updateScreenFlash() {
+        if (this.screenFlash.active) {
+            this.screenFlash.duration--;
+            
+            // Calculate fade-out intensity (starts high, fades to 0)
+            const progress = 1 - (this.screenFlash.duration / this.screenFlash.maxDuration);
+            this.screenFlash.intensity = 0.6 * Math.exp(-progress * 3); // Exponential fade
+            
+            // Deactivate when duration reaches 0
+            if (this.screenFlash.duration <= 0) {
+                this.screenFlash.active = false;
+                this.screenFlash.intensity = 0;
             }
         }
     }
@@ -898,6 +943,12 @@ class Game {
             // Grant 2 seconds of invincibility (120 frames at 60fps)
             this.player.invincibilityTimer = 120;
             this.player.invincible = true;
+            
+            // Trigger red screen flash
+            this.screenFlash.active = true;
+            this.screenFlash.duration = this.screenFlash.maxDuration;
+            this.screenFlash.intensity = 0.6; // Start at 60% opacity
+            
             // Spawn ghost animation
             this.ghosts.push(new Ghost(
                 this.player.x + this.player.width / 2,
@@ -1016,6 +1067,15 @@ class Game {
         this.particles.forEach(particle => particle.render(this.ctx));
         this.ghosts.forEach(ghost => ghost.render(this.ctx));
         this.floatingTexts.forEach(text => text.render(this.ctx));
+        
+        // Render red screen flash when life is lost
+        if (this.screenFlash.active) {
+            this.ctx.save();
+            this.ctx.globalAlpha = this.screenFlash.intensity;
+            this.ctx.fillStyle = '#ff0000';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.restore();
+        }
     }
     
     renderUI() {
@@ -1023,8 +1083,8 @@ class Game {
             document.getElementById('score').textContent = this.score;
             document.getElementById('lives').textContent = this.lives;
             document.getElementById('chaosLevel').textContent = this.chaosLevel;
-            document.getElementById('shieldHealth').textContent = this.shieldHealth;
-            document.getElementById('killsToNext').textContent = this.killsForNextChaos - this.killCount;
+            document.getElementById('shieldHealth').textContent = this.shieldHealth + '/' + this.maxShieldHealth;
+            document.getElementById('killsToNext').textContent = this.killCount + '/' + this.killsForNextChaos;
             
             // Update active powerups display
             const activePowerups = [];
@@ -1079,12 +1139,6 @@ class Player {
         this.originalHeight = this.height;
         this.sizeMultiplier = 1;
         this.pKeyPressed = false;
-        this.oKeyPressed = false;
-        this.iKeyPressed = false;
-        this.uKeyPressed = false;
-        this.yKeyPressed = false;
-        this.tKeyPressed = false;
-        this.cKeyPressed = false;
         this.spaceKeyPressed = false;
         this.facingDirection = 1; // 1 = right, -1 = left
         this.lavaContactTime = 0;
@@ -1131,133 +1185,23 @@ class Player {
             }
         }
         
-        // Testing: Y key to give spin attack powerup
-        if (keys['y']) {
-            if (!this.yKeyPressed) {
-                this.powerupEffects.spin_attack = 300; // Give spin attack powerup
-                game.floatingTexts.push(new FloatingText(
-                    this.x + this.width / 2,
-                    this.y - 20,
-                    'SPIN ATTACK GRANTED!',
-                    'collected'
-                ));
-                this.yKeyPressed = true;
-            }
-        } else {
-            this.yKeyPressed = false;
-        }
         
-        // Testing: P key to advance chaos level
+        // Testing: P key to open debug menu
         if (keys['p']) {
             if (!this.pKeyPressed) {
-                game.chaosLevel++;
-                game.killCount = 0;
-                game.killsForNextChaos += Math.floor(game.chaosLevel * 5);
-                game.addChaosEffect();
-                game.showChaosLevelUp();
-                // Update music for new chaos level
-                game.audio.playFunkyMusic().catch(error => {
-                    console.error('Failed to update music:', error);
-                });
+                if (window.openDebugMenu) {
+                    window.openDebugMenu();
+                }
                 this.pKeyPressed = true;
             }
         } else {
             this.pKeyPressed = false;
         }
         
-        // Testing: O key to toggle invincibility
-        if (keys['o']) {
-            if (!this.oKeyPressed) {
-                this.debugInvincible = !this.debugInvincible;
-                this.invincible = this.debugInvincible;
-                game.floatingTexts.push(new FloatingText(
-                    this.x + this.width / 2,
-                    this.y - 20,
-                    this.invincible ? 'INVINCIBLE ON' : 'INVINCIBLE OFF',
-                    'debug'
-                ));
-                this.oKeyPressed = true;
-            }
-        } else {
-            this.oKeyPressed = false;
-        }
         
-        // Testing: I key to toggle god mode gun
-        if (keys['i']) {
-            if (!this.iKeyPressed) {
-                this.godModeGun = !this.godModeGun;
-                game.floatingTexts.push(new FloatingText(
-                    this.x + this.width / 2,
-                    this.y - 20,
-                    this.godModeGun ? 'GOD GUN ON' : 'GOD GUN OFF',
-                    'debug'
-                ));
-                this.iKeyPressed = true;
-            }
-        } else {
-            this.iKeyPressed = false;
-        }
         
-        // Testing: U key to toggle big boy mode
-        if (keys['u']) {
-            if (!this.uKeyPressed) {
-                if (this.powerupEffects.big_boy) {
-                    delete this.powerupEffects.big_boy;
-                    game.floatingTexts.push(new FloatingText(
-                        this.x + this.width / 2,
-                        this.y - 20,
-                        'BIG BOY OFF',
-                        'debug'
-                    ));
-                } else {
-                    this.powerupEffects.big_boy = 600; // 10 seconds for testing
-                    game.floatingTexts.push(new FloatingText(
-                        this.x + this.width / 2,
-                        this.y - 20,
-                        'BIG BOY ON',
-                        'debug'
-                    ));
-                }
-                this.uKeyPressed = true;
-            }
-        } else {
-            this.uKeyPressed = false;
-        }
         
-        // Testing: T key to spawn troop carrier
-        if (keys['t']) {
-            if (!this.tKeyPressed) {
-                game.troopCarriers.push(new TroopCarrier(
-                    game.canvas.width + 60,
-                    324 - 24 // Ground level minus carrier height
-                ));
-                game.floatingTexts.push(new FloatingText(
-                    this.x + this.width / 2,
-                    this.y - 20,
-                    'CARRIER SPAWNED!',
-                    'debug'
-                ));
-                this.tKeyPressed = true;
-            }
-        } else {
-            this.tKeyPressed = false;
-        }
         
-        // Testing: C key to trigger clone shot
-        if (keys['c']) {
-            if (!this.cKeyPressed) {
-                this.powerupEffects.clone = 600; // 10 seconds
-                game.floatingTexts.push(new FloatingText(
-                    this.x + this.width / 2,
-                    this.y - 20,
-                    'CLONE SHOT ACTIVATED!',
-                    'collected'
-                ));
-                this.cKeyPressed = true;
-            }
-        } else {
-            this.cKeyPressed = false;
-        }
         
         // Space bar: Flip facing direction
         if (keys[' ']) {
@@ -1353,8 +1297,8 @@ class Player {
                         const cloneCount = this.powerupEffects.clone ? 2 : 1;
                         
                         for (let clone = 0; clone < cloneCount; clone++) {
-                            const cloneOffsetX = clone * 20;
-                            const cloneOffsetY = clone * 10;
+                            const cloneOffsetX = clone * (this.originalWidth / 2);
+                            const cloneOffsetY = clone * (this.originalHeight / 4);
                             
                             // Spread shot - create fan pattern in each direction
                             if (this.powerupEffects.spread_shot) {
@@ -1364,8 +1308,8 @@ class Player {
                                     const spreadVy = Math.sin(spreadAngle) * 8;
                                     
                                     this.createSingleBullet(
-                                        this.x + this.width / 2 + cloneOffsetX,
-                                        this.y + this.height / 2 + cloneOffsetY,
+                                        this.x + this.originalWidth / 2 + cloneOffsetX,
+                                        this.y + this.originalHeight / 2 + cloneOffsetY,
                                         bulletType,
                                         spreadVx - 8,
                                         spreadVy - 0
@@ -1374,8 +1318,8 @@ class Player {
                             } else {
                                 // Single bullet per direction
                                 this.createSingleBullet(
-                                    this.x + this.width / 2 + cloneOffsetX,
-                                    this.y + this.height / 2 + cloneOffsetY,
+                                    this.x + this.originalWidth / 2 + cloneOffsetX,
+                                    this.y + this.originalHeight / 2 + cloneOffsetY,
                                     bulletType,
                                     vx - 8,
                                     vy - 0
@@ -1395,8 +1339,8 @@ class Player {
                                             const spreadVy = Math.sin(spreadAngle) * 8;
                                             
                                             this.createSingleBullet(
-                                                this.x + this.width / 2 + cloneOffsetX,
-                                                this.y + this.height / 2 + multi * 6 + cloneOffsetY,
+                                                this.x + this.originalWidth / 2 + cloneOffsetX,
+                                                this.y + this.originalHeight / 2 + multi * 6 + cloneOffsetY,
                                                 bulletType,
                                                 spreadVx - 8,
                                                 spreadVy + multi * 0.5
@@ -1404,8 +1348,8 @@ class Player {
                                         }
                                     } else {
                                         this.createSingleBullet(
-                                            this.x + this.width / 2 + cloneOffsetX,
-                                            this.y + this.height / 2 + multi * 6 + cloneOffsetY,
+                                            this.x + this.originalWidth / 2 + cloneOffsetX,
+                                            this.y + this.originalHeight / 2 + multi * 6 + cloneOffsetY,
                                             bulletType,
                                             vx - 8,
                                             vy + multi * 0.5
@@ -1425,8 +1369,8 @@ class Player {
                         const vy = Math.sin(angle) * 10;
                         
                         this.createSingleBullet(
-                            this.x + this.width / 2,
-                            this.y + this.height / 2,
+                            this.x + this.originalWidth / 2,
+                            this.y + this.originalHeight / 2,
                             'chaos',
                             vx - 8,
                             vy - 0
@@ -1436,8 +1380,8 @@ class Player {
                         if (this.godModeGun) {
                             // Explosive bullets in each direction
                             let explosiveBullet = new Bullet(
-                                this.x + this.width / 2, 
-                                this.y + this.height / 2,
+                                this.x + this.originalWidth / 2, 
+                                this.y + this.originalHeight / 2,
                                 vx,
                                 vy
                             );
@@ -1802,7 +1746,7 @@ class Player {
     
     triggerBigBoy() {
         // Create a massive slow-moving bullet
-        game.bullets.push(new BigBoyBullet(this.x + this.width, this.y + this.height / 2));
+        game.bullets.push(new BigBoyBullet(this.x + this.originalWidth, this.y + this.originalHeight / 2));
         
         game.floatingTexts.push(new FloatingText(
             this.x + this.width / 2,
@@ -1831,16 +1775,16 @@ class Player {
         
         // Create bullets based on combinations
         for (let clone = 0; clone < bulletCount; clone++) {
-            const cloneOffsetX = clone * 20; // Increased offset to make cloning more visible
-            const cloneOffsetY = clone * 10; // Vertical offset for clone bullets
+            const cloneOffsetX = clone * (this.originalWidth / 2); // Proportional offset based on original size
+            const cloneOffsetY = clone * (this.originalHeight / 4); // Vertical offset proportional to original size
             
             if (tripleShot && spreadPattern) {
                 // Triple spread combo: 3x5 grid of bullets
                 for (let row = 0; row < 3; row++) {
                     for (let col = -2; col <= 2; col++) {
                         this.createSingleBullet(
-                            this.x + this.width + cloneOffsetX,
-                            this.y + this.height / 2 + (row - 1) * 8 + cloneOffsetY,
+                            this.x + this.originalWidth + cloneOffsetX,
+                            this.y + this.originalHeight / 2 + (row - 1) * 8 + cloneOffsetY,
                             bulletType,
                             col * 2,
                             (row - 1) * 1.5
@@ -1851,8 +1795,8 @@ class Player {
                 // Triple shot: 3 bullets vertically
                 for (let i = -1; i <= 1; i++) {
                     this.createSingleBullet(
-                        this.x + this.width + cloneOffsetX,
-                        this.y + this.height / 2 + i * 8 + cloneOffsetY,
+                        this.x + this.originalWidth + cloneOffsetX,
+                        this.y + this.originalHeight / 2 + i * 8 + cloneOffsetY,
                         bulletType,
                         0,
                         i * 0.5
@@ -1862,8 +1806,8 @@ class Player {
                 // Spread shot: 5 bullets in fan
                 for (let i = -2; i <= 2; i++) {
                     this.createSingleBullet(
-                        this.x + this.width + cloneOffsetX,
-                        this.y + this.height / 2 + cloneOffsetY,
+                        this.x + this.originalWidth + cloneOffsetX,
+                        this.y + this.originalHeight / 2 + cloneOffsetY,
                         bulletType,
                         0,
                         i * 2
@@ -1872,8 +1816,8 @@ class Player {
             } else {
                 // Single bullet
                 this.createSingleBullet(
-                    this.x + this.width + cloneOffsetX,
-                    this.y + this.height / 2 + cloneOffsetY,
+                    this.x + this.originalWidth + cloneOffsetX,
+                    this.y + this.originalHeight / 2 + cloneOffsetY,
                     bulletType,
                     0,
                     0
@@ -1908,7 +1852,7 @@ class Player {
             }
             // Explosive bullets
             for (let i = 0; i < 2; i++) {
-                let bullet = new Bullet(this.x + this.width, this.y + this.height / 2 + (i - 0.5) * 10);
+                let bullet = new Bullet(this.x + this.originalWidth, this.y + this.originalHeight / 2 + (i - 0.5) * 10);
                 bullet.explosive = true;
                 bullet.piercing = true;
                 bullet.vx = bullet.vx * this.facingDirection;
@@ -3247,28 +3191,64 @@ class Ghost {
         this.x = x;
         this.y = y;
         this.startY = y;
-        this.vx = (Math.random() - 0.5) * 3; // Slightly more horizontal drift
-        this.vy = -3 - Math.random() * 2; // Float upward faster
-        this.life = 90; // 1.5 seconds at 60fps (shorter duration)
-        this.maxLife = 90;
+        this.startX = x;
+        this.targetY = 0; // Top of screen
+        this.baseVx = (Math.random() - 0.5) * 1; // Reduced base horizontal drift for more wave control
+        this.vy = (this.targetY - this.startY) / 120; // Calculate velocity to reach top in 120 frames (2 seconds)
+        this.life = 120; // 2 seconds at 60fps
+        this.maxLife = 120;
         this.size = 12;
         this.oscillation = 0;
-        this.fadeDelay = 20; // Start fading almost immediately
+        this.fadeDelay = 20; // Start fading after 20 frames (1/3 second)
+        
+        // Enhanced wave parameters for more pronounced sine wave motion
+        this.wavePhase = Math.random() * Math.PI * 2; // Random starting phase
+        this.waveAmplitude = 4 + Math.random() * 6; // Larger wave amplitude (4-10 pixels)
+        this.waveFrequency = 0.08 + Math.random() * 0.06; // Slower frequency for more graceful waves (0.08-0.14)
+        this.secondaryWavePhase = Math.random() * Math.PI * 2;
+        this.secondaryAmplitude = 2 + Math.random() * 3; // Larger secondary wave (2-5 pixels)
+        this.secondaryFrequency = 0.12 + Math.random() * 0.08; // Slower secondary wave (0.12-0.20)
+        this.tertiaryWavePhase = Math.random() * Math.PI * 2; // Third wave layer
+        this.tertiaryAmplitude = 1 + Math.random() * 2; // Small tertiary wave (1-3 pixels)
+        this.tertiaryFrequency = 0.06 + Math.random() * 0.04; // Very slow tertiary wave (0.06-0.10)
     }
     
     update() {
-        this.x += this.vx;
-        this.y += this.vy;
-        this.oscillation += 0.1;
+        // Update oscillation for wave calculations
+        this.oscillation += 0.05; // Slower oscillation increment for smoother waves
         this.life--;
         
-        // Gentle floating motion
-        this.x += Math.sin(this.oscillation) * 0.3;
-        this.vy += Math.sin(this.oscillation * 0.5) * 0.05;
+        // Calculate progress through the journey (0 to 1)
+        const progress = (this.maxLife - this.life) / this.maxLife;
         
-        // Slow down over time
-        this.vx *= 0.98;
-        this.vy *= 0.99;
+        // Primary sine wave - large, slow, graceful horizontal motion
+        const primaryWave = Math.sin(this.oscillation * this.waveFrequency + this.wavePhase) 
+                          * this.waveAmplitude * (1 + progress * 0.8); // More pronounced over time
+        
+        // Secondary wave - medium speed, adds complexity to the sine pattern
+        const secondaryWave = Math.sin(this.oscillation * this.secondaryFrequency + this.secondaryWavePhase) 
+                            * this.secondaryAmplitude * (1 + progress * 0.6);
+        
+        // Tertiary wave - very slow, adds subtle long-form undulation
+        const tertiaryWave = Math.sin(this.oscillation * this.tertiaryFrequency + this.tertiaryWavePhase) 
+                           * this.tertiaryAmplitude * (1 + progress * 0.4);
+        
+        // Combine all waves for complex sine wave horizontal movement
+        const totalHorizontalOffset = primaryWave + secondaryWave + tertiaryWave;
+        
+        // Move with base velocity plus complex wave motion
+        this.x = this.startX + (this.baseVx * progress * 120) + totalHorizontalOffset;
+        this.y += this.vy;
+        
+        // Enhanced vertical wave motion for more floating effect
+        const verticalPrimaryWave = Math.sin(this.oscillation * 0.08 + this.wavePhase) * 1.5 * progress;
+        const verticalSecondaryWave = Math.sin(this.oscillation * 0.12 + this.secondaryWavePhase) * 0.8 * progress;
+        this.y += verticalPrimaryWave + verticalSecondaryWave;
+        
+        // Ensure we don't go past the top of screen
+        if (this.y < this.targetY) {
+            this.y = this.targetY;
+        }
     }
     
     render(ctx) {
@@ -4560,10 +4540,15 @@ class AudioSystem {
         console.log('🎵 Loading titlescreen.mp3...');
 
         try {
-            // Create audio element for title music
-            this.titleMusic = new Audio('titlescreen.mp3');
+            // Create audio element for title music with cache busting
+            this.titleMusic = new Audio(`titlescreen.mp3?v=${Date.now()}`);
             this.titleMusic.loop = true;
             this.titleMusic.volume = this.musicVolumeMultiplier;
+            
+            // Check if title music was muted
+            if (window.titleMuted) {
+                this.titleMusic.muted = true;
+            }
             
             // Start playing
             await this.titleMusic.play();
@@ -4610,8 +4595,9 @@ class AudioSystem {
         console.log(`🎵 Loading ${filename} for chaos level ${chaosLevel}...`);
 
         try {
-            // Create audio element
-            this.backgroundMusic = new Audio(filename);
+            // Create audio element with cache busting to force reload of replaced files
+            const cacheBustingUrl = `${filename}?v=${Date.now()}`;
+            this.backgroundMusic = new Audio(cacheBustingUrl);
             this.backgroundMusic.loop = true;
             
             // Use slider volume directly for all tracks
@@ -4880,6 +4866,24 @@ function closeLibrary() {
     }
     document.getElementById('library').classList.add('hidden');
 }
+
+function openSettings() {
+    if (game) {
+        game.audio.playMenuSelect();
+    }
+    document.getElementById('settings').classList.remove('hidden');
+}
+
+function closeSettings() {
+    if (game) {
+        game.audio.playMenuSelect();
+    }
+    document.getElementById('settings').classList.add('hidden');
+}
+
+// Expose functions to window for mobile compatibility
+window.populateLibrary = populateLibrary;
+window.showTab = showTab;
 
 // Initialize logo when page loads
 window.addEventListener('load', () => {
