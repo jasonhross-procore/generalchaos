@@ -278,8 +278,8 @@
             border: 2px solid #333;
         }
         
-        /* Mobile Support */
-        @media screen and (max-width: 1024px) {
+        /* Mobile Support - using hover capability as primary mobile detection */
+        @media screen and (max-width: 1024px), screen and (hover: none) {
             body {
                 min-height: 100vh;
                 min-height: 100dvh; /* Dynamic viewport height */
@@ -327,7 +327,8 @@
         }
         
         /* Fullscreen canvas and UI positioning only in landscape */
-        @media screen and (max-width: 1024px) and (orientation: landscape) {
+        @media screen and (max-width: 1024px) and (orientation: landscape),
+               screen and (hover: none) and (orientation: landscape) {
             #gameCanvas {
                 height: 100vh !important;
                 width: 100vw !important;
@@ -493,7 +494,7 @@
         }
         
         /* On mobile, make buttons flexible */
-        @media screen and (max-width: 1024px) {
+        @media screen and (max-width: 1024px), screen and (hover: none) {
             .main-menu-buttons button {
                 flex: 1 1 0;
                 min-width: 0;
@@ -512,7 +513,8 @@
         }
         
         /* Mobile controls - only show in landscape on mobile devices when game is active */
-        @media screen and (max-width: 1024px) and (orientation: landscape) {
+        @media screen and (max-width: 1024px) and (orientation: landscape), 
+               screen and (hover: none) and (orientation: landscape) {
             .mobile-controls.game-active {
                 display: flex !important;
                 justify-content: space-between;
@@ -533,7 +535,8 @@
         }
         
         /* Hide mobile controls in portrait mode */
-        @media screen and (max-width: 1024px) and (orientation: portrait) {
+        @media screen and (max-width: 1024px) and (orientation: portrait),
+               screen and (hover: none) and (orientation: portrait) {
             .mobile-controls {
                 display: none !important;
             }
@@ -704,7 +707,7 @@
         }
         
         /* Make mute button even more tappable on mobile */
-        @media screen and (max-width: 1024px) {
+        @media screen and (max-width: 1024px), screen and (hover: none) {
             .tiny-mute {
                 width: 48px;
                 height: 48px;
@@ -1134,8 +1137,19 @@
                     console.log('Screen width:', window.innerWidth, 'height:', window.innerHeight);
                     console.log('Viewport:', window.visualViewport?.width, 'x', window.visualViewport?.height);
                     
-                    // Force mobile controls visible on small screens in landscape only
-                    if (window.innerWidth <= 1024) {
+                    // Force mobile controls visible on mobile devices in landscape only
+                    // Check for mobile device using multiple criteria
+                    const isMobile = window.innerWidth <= 1024 || 
+                                   /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                                   ('ontouchstart' in window) ||
+                                   (navigator.maxTouchPoints > 0);
+                    
+                    console.log('Is mobile device:', isMobile);
+                    console.log('User agent:', navigator.userAgent);
+                    console.log('Touch support:', 'ontouchstart' in window);
+                    console.log('Max touch points:', navigator.maxTouchPoints);
+                    
+                    if (isMobile) {
                         console.log('Screen orientation:', window.screen?.orientation?.type || 'unknown');
                         console.log('Window dimensions - Width:', window.innerWidth, 'Height:', window.innerHeight);
                         
